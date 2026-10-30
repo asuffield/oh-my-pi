@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added optional `AgentTool.validateCall` hook to reject invalid or intercepted calls before user approval
+- Added optional `AgentTool.validateCall` hook to reject invalid or intercepted calls before user approval ([#17494](https://github.com/can1357/oh-my-pi/pull/17494) by [@asuffield](https://github.com/asuffield))
 
 ## [18.14.0] - 2026-10-29
 
