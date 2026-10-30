@@ -604,11 +604,15 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		const command = typeof rawCommand === "string" ? rawCommand : "(missing)";
 		return [`Command: ${truncateForPrompt(command)}`];
 	};
-	readonly validateCall = (args: unknown, ctx?: AgentToolContext): void => {
-		const input = (args ?? {}) as Partial<BashToolInput>;
-		const rawCommand = typeof input.command === "string" ? input.command : "";
+	#normalizeInput(input: BashToolInput): {
+		rawCommand: string;
+		command: string;
+		cwd: string | undefined;
+		name: string | undefined;
+	} {
+		const rawCommand = input.command;
 		let command = rawCommand;
-		let cwd = typeof input.cwd === "string" ? input.cwd : undefined;
+		let cwd = input.cwd;
 		if (!cwd) {
 			const cd = extractLeadingCdTarget(command);
 			if (cd) {
@@ -616,8 +620,12 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				command = cd.rest;
 			}
 		}
-
 		const name = blankToUndefined(input.name);
+		return { rawCommand, command, cwd, name };
+	}
+
+	readonly validateCall = (input: BashToolInput, ctx?: AgentToolContext): void => {
+		const { rawCommand, command, cwd, name } = this.#normalizeInput(input);
 		const asyncRequested = input.async === true;
 		if (name !== undefined) {
 			if (!this.#launchEnabled) throw new ToolError("Service launch is disabled in this session.");
@@ -1079,56 +1087,30 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 
 	async execute(
 		toolCallId: string,
-		{
-			command: rawCommand,
-			timeout: rawTimeout,
-			cwd,
-			name: rawName,
-			ready: rawReady,
-			async: rawAsync,
-			pty,
-		}: BashToolInput,
+		input: BashToolInput,
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<BashToolDetails>,
 		ctx?: AgentToolContext,
 	): Promise<AgentToolResult<BashToolDetails>> {
-		this.validateCall(
-			{
-				command: rawCommand,
-				timeout: rawTimeout,
-				cwd,
-				name: rawName,
-				ready: rawReady,
-				async: rawAsync,
-				pty,
-			},
-			ctx,
-		);
-		let command = rawCommand;
+		this.validateCall(input, ctx);
+		const { rawCommand, command: normalizedCommand, cwd, name } = this.#normalizeInput(input);
+		let command = normalizedCommand;
+		const rawTimeout = input.timeout;
+		const rawReady = input.ready;
+		const rawAsync = input.async;
+		const pty = input.pty;
+
 		// The session this call belongs to, captured before any await: a session
 		// change while the call waits must not move it into the new session's
 		// shell, nor hand it the new session's identity.
 		const sessionId = this.session.getSessionId?.() ?? undefined;
 		const sessionEnv = this.#sessionEnv();
 
-		// Extract a leading `cd <path> && ...` into cwd when the model ignores the
-		// cwd parameter. The scanner captures only a single path token and defers
-		// to the shell for anything else (redirects, extra args, shell expansion),
-		// so it never absorbs shell syntax like `cd /tmp 2>/dev/null && ...` into
-		// the structured cwd. Constrained to a top-level `&&` on the first line.
-		if (!cwd) {
-			const cd = extractLeadingCdTarget(command);
-			if (cd) {
-				cwd = cd.path;
-				command = cd.rest;
-			}
-		}
 		// Mode selection runs on normalized fields: a caller that materializes
 		// every optional argument with empty or placeholder values still asked
 		// for a plain command. Only `async: true` is an async request, a blank
 		// `name` is no service name, and service-only fields with nothing in
 		// them are not a service request.
-		const name = blankToUndefined(rawName);
 		const ready = normalizeReady(rawReady);
 		const asyncRequested = rawAsync === true;
 		const pendingNotices: string[] = [];

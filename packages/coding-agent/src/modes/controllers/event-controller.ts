@@ -1,3 +1,4 @@
+import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
@@ -1972,7 +1973,7 @@ export class EventController {
 		this.#updateWorkingMessageFromIntent(event.intent);
 		const tool = this.ctx.viewSession.getToolByName(event.toolName);
 		const renderToolName = toolRenderName(event.toolName, tool);
-		const blocked = this.#blockingPrompt(renderToolName, event.args);
+		const blocked = await this.#blockingPrompt(renderToolName, event.args);
 		if (blocked) {
 			this.#blockingPrompts.set(event.toolCallId, blocked);
 			setRunStatus(blocked);
@@ -2061,7 +2062,7 @@ export class EventController {
 	 * `resolveApproval` rather than `requiresApproval` so a `deny` policy does not
 	 * throw in the render path.
 	 */
-	#blockingPrompt(toolName: string, args: unknown): RunStatus | undefined {
+	async #blockingPrompt(toolName: string, args: unknown): Promise<RunStatus | undefined> {
 		if (toolName === "ask") {
 			const questions = recoverAskQuestions(args)?.map(question => question.question);
 			return { state: "blocked", kind: "question", msg: questions?.join(" ") };
@@ -2071,7 +2072,7 @@ export class EventController {
 		if (!tool) return undefined;
 		if (tool.validateCall) {
 			try {
-				tool.validateCall(args as never);
+				await tool.validateCall(args as never, { toolNames: session.getEnabledToolNames() } as AgentToolContext);
 			} catch {
 				return undefined;
 			}

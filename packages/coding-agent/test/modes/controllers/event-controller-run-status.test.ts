@@ -167,4 +167,22 @@ describe("EventController run status while prompts wait on the user", () => {
 
 		expect(report).toHaveBeenLastCalledWith(expect.objectContaining({ state: "blocked", kind: "permission" }));
 	});
+
+	it("does not report a tool call as blocked on permission when validateCall rejects it", async () => {
+		const report = vi.spyOn(runStatus, "setRunStatus").mockImplementation(() => {});
+		cfgToolsApproval.override(settings, { bash: "prompt" });
+		const bash = {
+			name: "bash",
+			label: "Bash",
+			validateCall: vi.fn(() => {
+				throw new Error("Blocked by validation");
+			}),
+		} as unknown as AgentTool;
+		const controller = new EventController(createInteractiveModeContext({ session: { getToolByName: () => bash } }));
+
+		await controller.handleEvent(AGENT_START);
+		await controller.handleEvent(toolStart("bash-1", "bash", { command: "cat file.txt" }));
+
+		expect(report).not.toHaveBeenCalledWith(expect.objectContaining({ state: "blocked", kind: "permission" }));
+	});
 });
