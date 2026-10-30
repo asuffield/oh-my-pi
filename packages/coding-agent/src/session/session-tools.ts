@@ -1095,7 +1095,7 @@ export class SessionTools {
 							restrictions,
 						);
 						if (resolved.policy === "deny") throw denyError(resolved, target.name);
-						await target.validateCall?.(effectiveArgs as never, ctx);
+						await target.validateCall?.(effectiveArgs, ctx);
 						if (resolved.policy === "allow") {
 							return await target.execute(toolCallId, effectiveArgs as never, signal, onUpdate, ctx as never);
 						}
@@ -1103,7 +1103,7 @@ export class SessionTools {
 						// remains per-call, even after the client selects Always allow.
 						cacheable = !resolved.override;
 					} else {
-						await target.validateCall?.(effectiveArgs as never, ctx);
+						await target.validateCall?.(effectiveArgs, ctx);
 					}
 					const permissionIntent = getPermissionIntent(target.name, effectiveArgs);
 					if (!permissionIntent) {

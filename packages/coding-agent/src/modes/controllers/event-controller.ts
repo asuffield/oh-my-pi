@@ -2073,7 +2073,7 @@ export class EventController {
 		if (tool.validateCall) {
 			try {
 				const toolNames = session.getActiveToolNames?.() ?? session.getEnabledToolNames?.();
-				await tool.validateCall(args as never, { toolNames } as AgentToolContext);
+				await tool.validateCall(args, { toolNames } as AgentToolContext);
 			} catch {
 				return undefined;
 			}
