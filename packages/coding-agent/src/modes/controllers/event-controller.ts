@@ -2072,7 +2072,8 @@ export class EventController {
 		if (!tool) return undefined;
 		if (tool.validateCall) {
 			try {
-				await tool.validateCall(args as never, { toolNames: session.getEnabledToolNames() } as AgentToolContext);
+				const toolNames = session.getActiveToolNames?.() ?? session.getEnabledToolNames?.();
+				await tool.validateCall(args as never, { toolNames } as AgentToolContext);
 			} catch {
 				return undefined;
 			}

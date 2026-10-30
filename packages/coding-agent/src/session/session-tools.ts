@@ -12,6 +12,8 @@ import type { Settings } from "../config/settings";
 import type { CustomTool, CustomToolContext } from "../extensibility/custom-tools/types";
 import { CustomToolAdapter } from "../extensibility/custom-tools/wrapper";
 import type { ExtensionRunner, SourceInfo, ToolInfo } from "../extensibility/extensions";
+import type { ToolCallEventResult } from "../extensibility/extensions/types";
+import { normalizeToolEventInput, resolveToolEventInput } from "../extensibility/tool-event-input";
 import { type EvalPreludeDefinition, evalPreludeSummary } from "../eval/preludes";
 import { isEvalBridgeToolCallable } from "../eval/tool-bridge-policy";
 import { ExtensionToolWrapper } from "../extensibility/extensions/wrapper";
@@ -1048,9 +1050,35 @@ export class SessionTools {
 					onUpdate: never,
 					ctx: AgentToolContext | undefined,
 				) => {
+					let effectiveArgs = args;
+					const runner = this.#host.extensionRunner();
+					const loopEmitted = runner?.consumeToolCallEmitted(toolCallId, target.name) ?? false;
+					if (loopEmitted) {
+						runner?.markToolCallEmitted(toolCallId, target.name);
+					} else if (runner?.hasHandlers("tool_call")) {
+						const callResult = (await runner.emitToolCall(
+							{
+								type: "tool_call",
+								toolName: target.name,
+								toolCallId,
+								input: normalizeToolEventInput(
+									target.name,
+									resolveToolEventInput(target, args as Record<string, unknown>),
+								),
+							},
+							signal,
+						)) as ToolCallEventResult | undefined;
+						if (callResult?.block) {
+							throw new Error(callResult.reason || "Tool execution was blocked by an extension");
+						}
+						if (callResult?.input !== undefined) {
+							effectiveArgs = callResult.input;
+						}
+						runner.markToolCallEmitted(toolCallId, target.name);
+					}
 					const restrictions = approvalRestrictions(this.#host.settings, this.#host.sessionManager.getCwd());
 					// A restricted call is approved per call: a remembered ACP answer never covers it.
-					let cacheable = restrictedFolderReason(target, args, restrictions) === undefined;
+					let cacheable = restrictedFolderReason(target, effectiveArgs, restrictions) === undefined;
 					if (target.name === "bash") {
 						const explicitAutoApprove = this.#isExplicitAutoApproveMode();
 						const { approvalMode, userPolicies } = resolveApprovalFromContext({
@@ -1060,33 +1088,38 @@ export class SessionTools {
 						const mode = approvalMode === "yolo" && !explicitAutoApprove ? "always-ask" : approvalMode;
 						const resolved = resolveApproval(
 							target,
-							args,
+							effectiveArgs,
 							mode,
 							userPolicies,
 							getApprovalGrants(this.#host.settings.getAgentDir(), this.#host.sessionManager.getSessionId()),
 							restrictions,
 						);
 						if (resolved.policy === "deny") throw denyError(resolved, target.name);
-						await target.validateCall?.(args as never, ctx);
+						await target.validateCall?.(effectiveArgs as never, ctx);
 						if (resolved.policy === "allow") {
-							return await target.execute(toolCallId, args as never, signal, onUpdate, ctx as never);
+							return await target.execute(toolCallId, effectiveArgs as never, signal, onUpdate, ctx as never);
 						}
 						// A prompt forced by a critical command or an explicit pattern
 						// remains per-call, even after the client selects Always allow.
 						cacheable = !resolved.override;
 					} else {
-						await target.validateCall?.(args as never, ctx);
+						await target.validateCall?.(effectiveArgs as never, ctx);
 					}
-					const permissionIntent = getPermissionIntent(target.name, args);
+					const permissionIntent = getPermissionIntent(target.name, effectiveArgs);
 					if (!permissionIntent) {
-						return await target.execute(toolCallId, args as never, signal, onUpdate, ctx as never);
+						return await target.execute(toolCallId, effectiveArgs as never, signal, onUpdate, ctx as never);
 					}
 					// Preserve the exact arguments authorized by a selected or
 					// persisted ACP grant; inner handlers may mutate `args` in place.
-					const approvedCtx = (ctx ? { ...ctx, acpApprovedArgs: structuredCloneJSON(args) } : ctx) as never;
+					const approvedCtx = (
+						ctx ? { ...ctx, acpApprovedArgs: structuredCloneJSON(effectiveArgs) } : ctx
+					) as never;
 					const command =
-						target.name === "bash" && args && typeof args === "object" && !Array.isArray(args)
-							? stringProperty(args, "command")
+						target.name === "bash" &&
+						effectiveArgs &&
+						typeof effectiveArgs === "object" &&
+						!Array.isArray(effectiveArgs)
+							? stringProperty(effectiveArgs, "command")
 							: undefined;
 					const commandContent = command
 						? [{ type: "content" as const, content: { type: "text" as const, text: `$ ${command}` } }]
@@ -1094,7 +1127,7 @@ export class SessionTools {
 					// Short-circuit on persisted decisions.
 					const persisted = cacheable ? this.#acpPermissionDecisions.get(permissionIntent.cacheKey) : undefined;
 					if (persisted === "allow_always") {
-						return await target.execute(toolCallId, args as never, signal, onUpdate, approvedCtx);
+						return await target.execute(toolCallId, effectiveArgs as never, signal, onUpdate, approvedCtx);
 					}
 					if (persisted === "reject_always") {
 						throw new ToolError(`Tool call rejected by user (preference)`);
@@ -1207,10 +1240,10 @@ export class SessionTools {
 									title: permissionIntent.title,
 									...(target.name === "bash" ? { kind: "execute" } : {}),
 									status: "pending",
-									rawInput: args,
+									rawInput: effectiveArgs,
 									...(commandContent ? { content: commandContent } : {}),
 									locations: extractPermissionLocations(
-										args,
+										effectiveArgs,
 										this.#host.sessionManager.getCwd(),
 										permissionIntent.paths,
 									),
@@ -1258,7 +1291,7 @@ export class SessionTools {
 					if (selectedOption.kind === "reject_once" || selectedOption.kind === "reject_always") {
 						throw new ToolError(`Tool call rejected by user (${target.name})`);
 					}
-					return await target.execute(toolCallId, args as never, signal, onUpdate, approvedCtx);
+					return await target.execute(toolCallId, effectiveArgs as never, signal, onUpdate, approvedCtx);
 				};
 			},
 		}) as T;
