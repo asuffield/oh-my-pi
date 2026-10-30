@@ -604,6 +604,51 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		const command = typeof rawCommand === "string" ? rawCommand : "(missing)";
 		return [`Command: ${truncateForPrompt(command)}`];
 	};
+	readonly validateCall = (args: unknown, ctx?: AgentToolContext): void => {
+		const input = (args ?? {}) as Partial<BashToolInput>;
+		const rawCommand = typeof input.command === "string" ? input.command : "";
+		let command = rawCommand;
+		let cwd = typeof input.cwd === "string" ? input.cwd : undefined;
+		if (!cwd) {
+			const cd = extractLeadingCdTarget(command);
+			if (cd) {
+				cwd = cd.path;
+				command = cd.rest;
+			}
+		}
+
+		const name = blankToUndefined(input.name);
+		const asyncRequested = input.async === true;
+		if (name !== undefined) {
+			if (!this.#launchEnabled) throw new ToolError("Service launch is disabled in this session.");
+		}
+		if (name === undefined && asyncRequested && !cfgAsyncEnabled.get(this.session.settings)) {
+			throw new ToolError("Async bash execution is disabled. Enable async.enabled to use async mode.");
+		}
+
+		if (cfgBashInterceptorEnabled.get(this.session.settings)) {
+			const rules = cfgBashInterceptorPatterns
+				.get(this.session.settings)
+				.filter(rule => !name || rule.tool !== "bash");
+			const commandsToCheck = rawCommand === command ? [command] : [rawCommand, command];
+			for (const commandToCheck of commandsToCheck) {
+				const interception = checkBashInterception(commandToCheck, ctx?.toolNames ?? [], rules, rawCommand);
+				if (interception.block) {
+					throw new ToolError(interception.message ?? "Command blocked");
+				}
+			}
+		}
+
+		const router = InternalUrlRouter.instance();
+		const virtualCwd = cwd && router.canHandle(cwd) ? router.normalize(cwd) : undefined;
+		if (virtualCwd !== undefined) {
+			if (name !== undefined || canUseInteractiveBashPty(input.pty === true, ctx)) {
+				throw new ToolError(
+					`Working directory ${virtualCwd} exists only in the embedded shell; ${name !== undefined ? "services" : "pty commands"} run external processes and need a host directory.`,
+				);
+			}
+		}
+	};
 	readonly label = "Bash";
 	readonly loadMode = "essential";
 	get description(): string {
@@ -1047,6 +1092,18 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		onUpdate?: AgentToolUpdateCallback<BashToolDetails>,
 		ctx?: AgentToolContext,
 	): Promise<AgentToolResult<BashToolDetails>> {
+		this.validateCall(
+			{
+				command: rawCommand,
+				timeout: rawTimeout,
+				cwd,
+				name: rawName,
+				ready: rawReady,
+				async: rawAsync,
+				pty,
+			},
+			ctx,
+		);
 		let command = rawCommand;
 		// The session this call belongs to, captured before any await: a session
 		// change while the call waits must not move it into the new session's
@@ -1076,7 +1133,6 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		const asyncRequested = rawAsync === true;
 		const pendingNotices: string[] = [];
 		if (name !== undefined) {
-			if (!this.#launchEnabled) throw new ToolError("Service launch is disabled in this session.");
 			if (rawTimeout !== undefined)
 				pendingNotices.push("Ignored timeout: service-only; readiness follows ready.timeout.");
 			if (asyncRequested)
@@ -1086,25 +1142,6 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			// Keep service validation unchanged, but only warn when a condition was
 			// actually ignored.
 			pendingNotices.push("Ignored ready: service-only, and no service name was given.");
-		}
-		if (name === undefined && asyncRequested && !cfgAsyncEnabled.get(this.session.settings)) {
-			throw new ToolError("Async bash execution is disabled. Enable async.enabled to use async mode.");
-		}
-
-		// Check both the original command and the cwd-normalized command so
-		// leading `cd ... &&` wrappers do not hide either shell-navigation rules
-		// or the dedicated-tool command that follows the directory change.
-		if (cfgBashInterceptorEnabled.get(this.session.settings)) {
-			const rules = cfgBashInterceptorPatterns
-				.get(this.session.settings)
-				.filter(rule => !name || rule.tool !== "bash");
-			const commandsToCheck = rawCommand === command ? [command] : [rawCommand, command];
-			for (const commandToCheck of commandsToCheck) {
-				const interception = checkBashInterception(commandToCheck, ctx?.toolNames ?? [], rules, rawCommand);
-				if (interception.block) {
-					throw new ToolError(interception.message ?? "Command blocked");
-				}
-			}
 		}
 
 		if (cfgWorktreeClone.get(this.session.settings)) {
@@ -1127,11 +1164,6 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		const virtualCwd = cwd && router.canHandle(cwd) ? router.normalize(cwd) : undefined;
 		const commandCwd = virtualCwd ?? (cwd ? resolveToCwd(cwd, this.session.cwd) : this.session.cwd);
 		if (virtualCwd !== undefined) {
-			if (name !== undefined || canUseInteractiveBashPty(pty === true, ctx)) {
-				throw new ToolError(
-					`Working directory ${virtualCwd} exists only in the embedded shell; ${name !== undefined ? "services" : "pty commands"} run external processes and need a host directory.`,
-				);
-			}
 			const cwdStat = await this.#urlFilesystem(signal, approvalTier)
 				.stat(virtualCwd)
 				.catch((err: unknown) => {

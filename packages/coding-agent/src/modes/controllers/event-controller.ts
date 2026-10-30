@@ -2069,6 +2069,13 @@ export class EventController {
 		const session = this.ctx.viewSession;
 		const tool = session.getToolByName(toolName);
 		if (!tool) return undefined;
+		if (tool.validateCall) {
+			try {
+				tool.validateCall(args as never);
+			} catch {
+				return undefined;
+			}
+		}
 		const mode = cfgToolsApprovalMode.get(settings);
 		const userPolicies: Record<string, unknown> = cfgToolsApproval.get(settings);
 		const grants =

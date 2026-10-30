@@ -340,6 +340,13 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			}
 		}
 
+		try {
+			await this.tool.validateCall?.(effectiveParams, context);
+		} catch (error) {
+			cancelPreflight();
+			throw error;
+		}
+
 		// 2. Full approval gate against the (possibly revised) input that will actually run — resolves
 		// policy and prompts on `effectiveParams`, so the user approves exactly what executes. A revised
 		// input that newly resolves to `deny` is caught here even though the original passed the

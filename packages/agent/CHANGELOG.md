@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added optional `AgentTool.validateCall` hook to reject invalid or intercepted calls before user approval
+
 ## [18.14.0] - 2026-10-29
 
 ### Breaking Changes

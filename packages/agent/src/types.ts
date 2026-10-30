@@ -1259,6 +1259,13 @@ export interface AgentTool<
 	 */
 	approvalRestrictionPaths?: (args: unknown) => readonly string[] | undefined;
 
+	/**
+	 * Pre-approval validation hook. Called before prompting the user for approval
+	 * (and before tool execution) to reject invalid or intercepted calls early without
+	 * triggering an approval prompt or recording an approval grant.
+	 */
+	validateCall?: (args: any, context?: AgentToolContext) => Promise<void> | void;
+
 	/** The main execution callback for this tool. */
 	execute: AgentToolExecFn<TParameters, TDetails, TTheme>;
 

@@ -1067,12 +1067,15 @@ export class SessionTools {
 							restrictions,
 						);
 						if (resolved.policy === "deny") throw denyError(resolved, target.name);
+						await target.validateCall?.(args as never, ctx);
 						if (resolved.policy === "allow") {
 							return await target.execute(toolCallId, args as never, signal, onUpdate, ctx as never);
 						}
 						// A prompt forced by a critical command or an explicit pattern
 						// remains per-call, even after the client selects Always allow.
 						cacheable = !resolved.override;
+					} else {
+						await target.validateCall?.(args as never, ctx);
 					}
 					const permissionIntent = getPermissionIntent(target.name, args);
 					if (!permissionIntent) {
